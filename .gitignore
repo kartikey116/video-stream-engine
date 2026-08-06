@@ -7,3 +7,4 @@ storage
 
 # Real cluster secrets — never commit
 k8s/secret.local.yaml
+k8s/secret.yaml
