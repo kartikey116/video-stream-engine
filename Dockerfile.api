@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1: Install production dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:22-alpine AS builder
+
+WORKDIR /build
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2: Lean runtime image
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:22-alpine
+
+LABEL maintainer="video-stream-engine"
+LABEL service="api"
+
+# Tini handles PID 1 properly — forwards signals and reaps zombies.
+# Without it Node ignores SIGTERM and K8s has to SIGKILL after 30s.
+RUN apk add --no-cache tini
+
+WORKDIR /app
+
+COPY --from=builder /build/node_modules ./node_modules
+COPY package.json ./
+COPY src ./src
+COPY public ./public
+
+# Non-root user for security
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
+
+EXPOSE 8000
+
+ENV NODE_ENV=production
+
+ENTRYPOINT ["/sbin/tini", "-g", "--"]
+CMD ["node", "src/app.js"]

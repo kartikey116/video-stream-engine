@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: video-engine
+  labels:
+    app: worker
+spec:
+  # Initial replica count = 1. KEDA will override this and scale 0→10
+  # based on BullMQ queue depth. See keda-scaledobject.yaml.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      # Give BullMQ time to finish the current job and release the lock
+      # before K8s force-kills the pod. 20 min matches the lockDuration
+      # in transcodeWorker.js.
+      terminationGracePeriodSeconds: 1200
+      containers:
+        - name: worker
+          image: video-worker:latest
+          imagePullPolicy: Never   # Use local Minikube image cache
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          resources:
+            # FFmpeg is CPU/memory hungry — give it room to breathe.
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+            # Removed cpu limit to allow FFmpeg to use all available Minikube cores
+          volumeMounts:
+            - name: scratchpad-volume
+              mountPath: /app/storage/scratchpad
+      volumes:
+        - name: scratchpad-volume
+          emptyDir: {}

@@ -92,3 +92,29 @@ Status: 302 Found
 Location: [http://127.0.0.1:9000/processed-videos/.../file_022.ts?X-Amz-Signature=4c1ef](http://127.0.0.1:9000/processed-videos/.../file_022.ts?X-Amz-Signature=4c1ef)...
 
 The Direct Storage Download: Browser is redirect code 302 ko dekhta hai, fractions of millisecond mein apna path badalta hai, aur direct MinIO (:9000) se encrypted query string ke sath data download kar leta hai Status 200 OK par!
+
+
+
+
+
+
+
+docker run video-api:latest      # API server starts
+docker run video-worker:latest   # Worker starts (FFmpeg included!)
+docker run video-frontend:latest # Frontend starts
+
+
+
+Start the cluster:
+
+powershell
+minikube start
+(Kubernetes will wake up and automatically launch your API, Frontend, MinIO, and Redis pods exactly as they were).
+
+Open the tunnel (in a separate window) to access it:
+
+powershell
+minikube tunnel
+
+
+stern -n video-engine .

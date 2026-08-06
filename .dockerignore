@@ -1,0 +1,20 @@
+node_modules
+storage
+.env
+.env.*
+.git
+.gitignore
+*.md
+hlstest
+frontend/node_modules
+frontend/dist
+frontend/.gitignore
+.claude
+
+# Build-only artefacts — none of these belong in any image, and bench/ alone
+# ships ~10MB of sample video into the build context on every build.
+bench
+k8s
+Dockerfile*
+.dockerignore
+npm-debug.log*

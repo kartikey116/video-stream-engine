@@ -1,0 +1,45 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1: Install production dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:22-alpine AS builder
+
+WORKDIR /build
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2: Runtime with FFmpeg baked in
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:22-alpine
+
+LABEL maintainer="video-stream-engine"
+LABEL service="worker"
+
+# FFmpeg + ffprobe are required for transcoding and probing.
+# Alpine's package is statically linked and adds ~100MB.
+# Tini handles PID 1 properly — forwards SIGTERM so BullMQ can
+# finish the current job and release the lock before the pod dies.
+RUN apk add --no-cache ffmpeg tini
+
+WORKDIR /app
+
+COPY --from=builder /build/node_modules ./node_modules
+COPY package.json ./
+COPY src ./src
+
+# Scratchpad for temporary transcode workspaces.
+# The worker downloads source files here, encodes, uploads, then deletes.
+RUN mkdir -p storage/scratchpad && \
+    addgroup -S appgroup && \
+    adduser -S appuser -G appgroup && \
+    chown -R appuser:appgroup storage
+
+USER appuser
+
+ENV NODE_ENV=production
+
+# Worker pods don't expose HTTP, but the health check could use a future
+# /healthz endpoint. For now K8s uses process liveness.
+ENTRYPOINT ["/sbin/tini", "-g", "--"]
+CMD ["node", "src/workers/transcodeWorker.js"]

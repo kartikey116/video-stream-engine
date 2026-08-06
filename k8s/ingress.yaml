@@ -1,0 +1,81 @@
+# Requires: minikube addons enable ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: video-engine-ingress
+  namespace: video-engine
+  labels:
+    app.kubernetes.io/part-of: video-stream-engine
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"            # No upload size limit
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"      # 1 hr — long transcodes
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"          # SSE needs unbuffered responses
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"  # Streams uploads directly to API
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          # ── API routes (upload, stream, search, progress) ──
+          - path: /api/v1/upload
+            pathType: Prefix
+            backend:
+              service:
+                name: api-svc
+                port:
+                  number: 8000
+
+          - path: /api/v1/stream
+            pathType: Prefix
+            backend:
+              service:
+                name: api-svc
+                port:
+                  number: 8000
+
+          - path: /api/v1/stream-progress
+            pathType: Prefix
+            backend:
+              service:
+                name: api-svc
+                port:
+                  number: 8000
+
+          - path: /api/v1/search
+            pathType: Prefix
+            backend:
+              service:
+                name: api-svc
+                port:
+                  number: 8000
+
+          - path: /api/v1/transcript
+            pathType: Prefix
+            backend:
+              service:
+                name: api-svc
+                port:
+                  number: 8000
+
+          # ── Direct MinIO access for presigned URL redirects ──
+          # When streamController does res.redirect(signedUrl), the browser
+          # hits MinIO directly. This route makes MinIO reachable through
+          # the same Ingress IP.
+          - path: /processed-videos
+            pathType: Prefix
+            backend:
+              service:
+                name: minio-svc
+                port:
+                  number: 9000
+
+          # ── Frontend (default catch-all) ──
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-svc
+                port:
+                  number: 80

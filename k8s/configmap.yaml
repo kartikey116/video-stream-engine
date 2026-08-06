@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: video-engine
+  labels:
+    app.kubernetes.io/part-of: video-stream-engine
+data:
+  PORT: "8000"
+  NODE_ENV: "production"
+  REDIS_HOST: "redis-svc"
+  REDIS_PORT: "6379"
+  # In-cluster MinIO endpoint (ClusterIP service)
+  S3_ENDPOINT: "http://minio-svc:9000"
+  AWS_REGION: "us-east-1"

@@ -61,7 +61,7 @@
 
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import s3Client from '../config/s3Client.js';
+import s3Client, { getPresignClient } from '../config/s3Client.js';
 
 async function streamToString(stream) {
     const chunks = [];
@@ -72,9 +72,19 @@ async function streamToString(stream) {
     });
 }
 
+// HLS artifact names are machine-generated (v0, manifest.m3u8, file_003.ts).
+// Anything else is a malformed request and never reaches the storage layer.
+const SAFE_SEGMENT = /^[A-Za-z0-9_.-]+$/;
+
 export async function streamVideoController(req, res) {
     const { videoId, variantDir, file } = req.params;
-    
+
+    for (const part of [videoId, variantDir, file]) {
+        if (part !== undefined && (!SAFE_SEGMENT.test(part) || part.includes('..'))) {
+            return res.status(400).json({ error: "Malformed stream path." });
+        }
+    }
+
     const hlsFileTarget = variantDir ? `${variantDir}/${file}` : file;
     const s3Key = `${videoId}/${hlsFileTarget}`;
     const bucketName = 'processed-videos';
@@ -83,8 +93,19 @@ export async function streamVideoController(req, res) {
         //  CASE 1: Client demands a raw `.ts` segment fragment chunk
         // Action: Instantly sign it and redirect browser to pull direct from MinIO
         if (file.endsWith('.ts')) {
+            // Sign against the origin the BROWSER will use, not the in-cluster one.
+            // SigV4 covers the Host header, so signing against minio-svc:9000 and
+            // then rewriting the host produces SignatureDoesNotMatch. Deriving the
+            // origin from the incoming request means this works unchanged on
+            // localhost, on a minikube IP, and behind a real domain.
+            // The resulting path is /processed-videos/<key> — the Ingress routes
+            // that prefix straight to minio-svc.
+            const publicOrigin = `${req.protocol}://${req.get('host')}`;
             const command = new GetObjectCommand({ Bucket: bucketName, Key: s3Key });
-            const signedUrl = await getSignedUrl(s3Client, command, { expiresIn: 300 }); // 5 Mins validity
+            const signedUrl = await getSignedUrl(
+                getPresignClient(publicOrigin), command, { expiresIn: 300 } // 5 Mins validity
+            );
+
             return res.redirect(signedUrl);
         }
         // CASE 2: Client demands manifest structure (`master.m3u8` or `manifest.m3u8`)
@@ -125,7 +146,16 @@ export async function streamVideoController(req, res) {
             return res.send(modifiedLines.join('\n'));
         }
 
+        // CASE 3: Neither a segment nor a manifest. Without this branch the
+        // request falls off the end of the handler and the client hangs open
+        // until it times out, because no response is ever sent.
+        return res.status(400).json({ error: "Unsupported stream artifact type." });
+
     } catch (err) {
+        if (err.name === 'NoSuchKey' || err.$metadata?.httpStatusCode === 404) {
+            console.warn(`[Streaming-Gateway] Missing artifact: ${s3Key}`);
+            return res.status(404).json({ error: "Stream payload fragment not found." });
+        }
         console.error(`[Streaming-Gateway-Crash] Critical matrix failure:`, err);
         return res.status(500).json({ error: "Streaming node down." });
     }

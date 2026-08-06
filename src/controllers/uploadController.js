@@ -1,6 +1,5 @@
 import multer from 'multer';
 import multerS3 from 'multer-s3';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
 import s3Client from '../config/s3Client.js';
 import { dispatchTranscodeJobs } from '../queues/transcodeQueue.js';
 import { supabase } from '../config/dbConfig.js';
@@ -25,10 +24,25 @@ const cloudUpload = multer({
     })
 }).single('video'); // Key target parameter parsing name
 
+// multer-s3 processes the file stream before express.json() can parse body fields.
+// multer itself makes text fields available on req.body after the upload is done.
+
 export async function uploadVideoController(req, res) {
     cloudUpload(req, res, async function (err) {
         if (err) {
+            // The client went away, or the server was torn down, before the body
+            // finished streaming — nodemon restarting on a file change does this.
+            // Nothing was persisted and no storage node is at fault, so don't
+            // report it as a 500.
+            const aborted = err.code === 'ABORT_ERR' || err.name === 'AbortError' ||
+                            err.code === 'ECONNRESET' || req.destroyed;
+            if (aborted) {
+                console.warn("[Ingestion-Engine] Upload aborted before completion (client disconnected or server restarted).");
+                if (!res.headersSent) res.status(499).json({ error: "Upload aborted before completion." });
+                return;
+            }
             console.error("[Ingestion-Engine-Crash] Cloud stream chunk pipe fault:", err);
+            if (res.headersSent) return;
             return res.status(500).json({ error: "Storage node proxy choke: " + err.message });
         }
 
@@ -47,34 +61,20 @@ export async function uploadVideoController(req, res) {
 
             console.log(`\n📦 [Ingestion-Engine] Master Ingress locked. Video streaming direct to raw bucket: ${rawCloudInputKey}`);
 
-            // =========================================================================
-            // 🚀 STEP 1: Pre-creation of structural master metadata playlist array
-            // Synchronously logs tracking layouts inside the final processed-videos bucket
-            // =========================================================================
-            const masterPlaylistContent = `#EXTM3U
-#EXT-X-VERSION:3
-#EXT-X-STREAM-INF:BANDWIDTH=4950000,RESOLUTION=1920x1080
-v0/manifest.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=2750000,RESOLUTION=1280x720
-v1/manifest.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=1100000,RESOLUTION=854x480
-v2/manifest.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=440000,RESOLUTION=426x240
-v3/manifest.m3u8
-`;
-
-            await s3Client.send(new PutObjectCommand({
-                Bucket: 'processed-videos',
-                Key: `${videoId}/master.m3u8`,
-                Body: masterPlaylistContent,
-                ContentType: 'application/x-mpegURL'
-            }));
+            // NOTE: master.m3u8 is no longer pre-written here. The ABR ladder is
+            // decided by the worker after probing the source (tiers above the
+            // source resolution are dropped), so a playlist authored at upload
+            // time would advertise variants that never get encoded. The worker
+            // writes ${videoId}/master.m3u8 once the real tier list is known.
 
             // =========================================================================
-            // 🚀 STEP 1.5: Persist Metadata to Supabase Matrix
+            // 🚀 STEP 1: Persist Metadata to Supabase Matrix
             // =========================================================================
+            const title = (req.body && req.body.title) ? req.body.title.trim() : null;
+
             const { error: dbError } = await supabase.from('videos').insert({
                 videoId: videoId,
+                title: title || videoId,
                 cloudInputSource: `raw-videos/${rawCloudInputKey}`,
                 status: 'queued'
             });

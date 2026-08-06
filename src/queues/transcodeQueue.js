@@ -18,9 +18,10 @@ export async function dispatchTranscodeJobs(inputFilePath, videoId) {
             backoff: 5000
         }),
         queues['ai'].add(`job-${videoId}-ai`, { videoId, inputFilePath }, {
-            attempts: 1 // AI quota errors are handled internally; no point retrying
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 60000 } // 60s → 120s → 240s
         })
     ]);
 
-    console.log(`📌 [Queue-Producer] Jobs dispatched for ${videoId}`);
+    console.log(`[Queue-Producer] Jobs dispatched for ${videoId}`);
 }

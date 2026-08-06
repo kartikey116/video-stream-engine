@@ -4,3 +4,6 @@
 *.key
 node_modules
 storage
+
+# Real cluster secrets — never commit
+k8s/secret.local.yaml

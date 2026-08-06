@@ -1,0 +1,60 @@
+# Requires: KEDA installed in the cluster
+# Install: helm install keda kedacore/keda --namespace keda --create-namespace
+#
+# This ScaledObject watches two BullMQ Redis lists:
+#   - bull:transcode-master:wait  (video encoding jobs)
+#   - bull:transcode-ai:wait      (AI transcription jobs)
+#
+# When either list has ≥1 pending job, KEDA scales the worker deployment
+# from 0 → up to 10 replicas. When both lists are empty for 2 minutes,
+# it scales back to 0 (zero-cost idle).
+#
+# BullMQ stores waiting jobs as Redis list entries under the key pattern:
+#   bull:<queue-name>:wait
+# KEDA's redis trigger counts the list length and fires scaling.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker-scaler
+  namespace: video-engine
+  labels:
+    app.kubernetes.io/part-of: video-stream-engine
+spec:
+  scaleTargetRef:
+    name: worker                    # Must match the worker Deployment name
+  pollingInterval: 15               # Check Redis every 15 seconds
+  cooldownPeriod: 120               # Wait 2 min before scaling down to 0
+  minReplicaCount: 0                # Scale to zero when idle
+  maxReplicaCount: 10               # Max concurrent worker pods
+  triggers:
+    # Trigger 1: Video transcoding queue (waiting)
+    - type: redis
+      metadata:
+        address: redis-svc.video-engine.svc.cluster.local:6379
+        listName: bull:transcode-master:wait
+        listLength: "1"             # Scale up when ≥1 job waiting
+        activationListLength: "0"   # Activate from 0→1 when list is non-empty
+
+    # Trigger 2: AI enrichment queue (waiting)
+    - type: redis
+      metadata:
+        address: redis-svc.video-engine.svc.cluster.local:6379
+        listName: bull:transcode-ai:wait
+        listLength: "1"
+        activationListLength: "0"
+
+    # Trigger 3: Video transcoding queue (active)
+    - type: redis
+      metadata:
+        address: redis-svc.video-engine.svc.cluster.local:6379
+        listName: bull:transcode-master:active
+        listLength: "1"
+        activationListLength: "0"
+
+    # Trigger 4: AI enrichment queue (active)
+    - type: redis
+      metadata:
+        address: redis-svc.video-engine.svc.cluster.local:6379
+        listName: bull:transcode-ai:active
+        listLength: "1"
+        activationListLength: "0"
